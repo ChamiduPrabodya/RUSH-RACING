@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Car Racing</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <main id="stage" aria-label="Game stage">
+      <canvas id="game" aria-label="2D car racing canvas"></canvas>
+
+      <!-- HUD -->
+      <div id="hud" class="hud hidden" aria-live="polite">
+        <div class="hudLeft">
+          <button id="pauseBtn" class="iconBtn" aria-label="Pause">⏸</button>
+        </div>
+        <div class="hudRight">
+          <div class="hudStat"><span class="k">Score</span><span id="hudScore" class="v">0</span></div>
+          <div class="hudStat"><span class="k">Best</span><span id="hudBest" class="v">0</span></div>
+        </div>
+      </div>
+
+      <!-- MENU -->
+      <section id="menu" class="overlay" aria-label="Main menu">
+        <div class="title">
+          <div class="titleLine">RUSH</div>
+          <div class="titleLine">RACING</div>
+        </div>
+
+        <button id="playBtn" class="playBtn" aria-label="Play">
+          <span>PLAY</span>
+        </button>
+
+        <button id="soundBtn" class="soundBtn" aria-label="Sound">
+          <span id="soundIcon">🔊</span>
+        </button>
+
+        
+      </section>
+
+      <!-- GAME OVER -->
+      <section id="gameOver" class="overlay hidden" aria-label="Game over">
+        <div class="gameOverCard">
+          <div class="gameOverTitle">GAME OVER</div>
+          <div class="gameOverStat">Score: <span id="goScore">0</span></div>
+          <div class="gameOverStat">High Score: <span id="goBest">0</span></div>
+          <div id="goNew" class="gameOverNew hidden">NEW</div>
+          <div class="gameOverBtns">
+            <button id="homeBtn" class="sqBtn" aria-label="Home">⌂</button>
+            <button id="restartBtn" class="sqBtn" aria-label="Restart">↻</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Touch -->
+      <div id="touch" class="touch hidden" aria-label="Touch controls">
+        <button class="touchBtn" data-touch="left" aria-label="Left">◀</button>
+        <button class="touchBtn" data-touch="right" aria-label="Right">▶</button>
+      </div>
+    </main>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
