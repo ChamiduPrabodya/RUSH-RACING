@@ -14,6 +14,11 @@ const playBtn = document.getElementById("playBtn");
 const soundBtn = document.getElementById("soundBtn");
 const soundIcon = document.getElementById("soundIcon");
 
+const intro = document.getElementById("intro");
+const pauseOverlay = document.getElementById("pauseOverlay");
+const pauseHomeBtn = document.getElementById("pauseHomeBtn");
+const pauseRestartBtn = document.getElementById("pauseRestartBtn");
+
 const gameOver = document.getElementById("gameOver");
 const goScore = document.getElementById("goScore");
 const goBest = document.getElementById("goBest");
@@ -34,6 +39,7 @@ const smoothstep = (edge0, edge1, x) => {
 
 const STORAGE_BEST = "car_racing_best_v1";
 const STORAGE_SOUND = "car_racing_sound_v1";
+const STORAGE_THEME = "car_racing_theme_v1";
 
 const view = { w: 1, h: 1, dpr: 1 };
 const layout = {
@@ -144,6 +150,7 @@ const state = {
   mode: "menu", // menu | countdown | playing | paused | gameover
   sound: true,
   best: 0,
+  roadTheme: "town", // town | village | desert
 
   time: 0,
   speed: 0,
@@ -175,13 +182,38 @@ const loadPrefs = () => {
   const snd = localStorage.getItem(STORAGE_SOUND);
   state.sound = snd === null ? true : snd === "1";
   audio.enabled = state.sound;
-  soundIcon.textContent = state.sound ? "🔊" : "🔇";
+  soundIcon.textContent = state.sound ? "\u{1F50A}" : "\u{1F507}";
   hudBest.textContent = String(state.best);
   goBest.textContent = String(state.best);
+
+  const th = (localStorage.getItem(STORAGE_THEME) || "town").toLowerCase();
+  state.roadTheme = th === "desert" || th === "village" || th === "town" ? th : "town";
 };
 
 const saveBest = () => localStorage.setItem(STORAGE_BEST, String(state.best));
 const saveSound = () => localStorage.setItem(STORAGE_SOUND, state.sound ? "1" : "0");
+const saveTheme = () => localStorage.setItem(STORAGE_THEME, state.roadTheme);
+
+const syncThemeButtons = () => {
+  const buttons = menu.querySelectorAll(".themeBtn");
+  for (const btn of buttons) {
+    const on = btn.dataset.theme === state.roadTheme;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+};
+
+for (const btn of menu.querySelectorAll(".themeBtn")) {
+  btn.addEventListener("click", () => {
+    const th = (btn.dataset.theme || "town").toLowerCase();
+    if (th !== "desert" && th !== "village" && th !== "town") return;
+    if (state.roadTheme === th) return;
+    state.roadTheme = th;
+    saveTheme();
+    syncThemeButtons();
+    sfx.click();
+  });
+}
 
 const laneCenterX = (lane) => layout.roadLeft + layout.laneW * (lane + 0.5);
 
@@ -355,6 +387,7 @@ const addParticles = (x, y, count, baseColor) => {
 const crash = () => {
   if (state.mode !== "playing") return;
   state.mode = "gameover";
+  pauseOverlay.classList.add("hidden");
   state.crashT = 0.85;
   state.shakeT = 0.25;
   state.shakeMag = 16;
@@ -379,6 +412,7 @@ const crash = () => {
 
 const startGame = () => {
   state.mode = "countdown";
+  pauseOverlay.classList.add("hidden");
   state.time = 0;
   state.speed = 560;
   state.distance = 0;
@@ -411,17 +445,63 @@ const startGame = () => {
 
 const goHome = () => {
   state.mode = "menu";
+  pauseOverlay.classList.add("hidden");
   menu.classList.remove("hidden");
   gameOver.classList.add("hidden");
   hud.classList.add("hidden");
 };
 
+let introDone = false;
+let introTimer = null;
+const finishIntro = () => {
+  if (introDone) return;
+  introDone = true;
+  if (introTimer) clearTimeout(introTimer);
+  introTimer = null;
+  intro.classList.remove("playing");
+  intro.classList.add("hidden");
+  goHome();
+};
+
+const showIntro = () => {
+  introDone = false;
+  menu.classList.add("hidden");
+  gameOver.classList.add("hidden");
+  hud.classList.add("hidden");
+  pauseOverlay.classList.add("hidden");
+  intro.classList.remove("hidden");
+  intro.classList.remove("playing");
+  // restart animation
+  void intro.offsetWidth;
+  intro.classList.add("playing");
+  introTimer = setTimeout(finishIntro, 2400);
+};
+
+intro.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  finishIntro();
+});
+document.addEventListener("keydown", () => {
+  if (!introDone && !intro.classList.contains("hidden")) finishIntro();
+});
+
+pauseHomeBtn.addEventListener("click", () => {
+  sfx.click();
+  goHome();
+});
+pauseRestartBtn.addEventListener("click", () => {
+  sfx.click();
+  startGame();
+});
+
 const togglePause = () => {
   if (state.mode === "playing" || state.mode === "countdown") {
     state.pauseReturnMode = state.mode;
     state.mode = "paused";
+    pauseOverlay.classList.remove("hidden");
   } else if (state.mode === "paused") {
     state.mode = state.pauseReturnMode || "playing";
+    pauseOverlay.classList.add("hidden");
   }
 };
 
@@ -488,7 +568,7 @@ pauseBtn.addEventListener("click", () => {
 soundBtn.addEventListener("click", () => {
   state.sound = !state.sound;
   audio.enabled = state.sound;
-  soundIcon.textContent = state.sound ? "🔊" : "🔇";
+  soundIcon.textContent = state.sound ? "\u{1F50A}" : "\u{1F507}";
   saveSound();
   sfx.click();
 });
@@ -504,73 +584,192 @@ const drawRoundedRect = (x, y, w, h, r) => {
   ctx.closePath();
 };
 
-const drawRoad = (scroll, tNow) => {
-  const curveDir = Math.sin(tNow * 0.17);
-  const curveMag = curveDir * clamp(view.w * 0.10, 14, 46);
-  const curveAt = (y) => curveMag * Math.pow(clamp(y / view.h, 0, 1), 2);
+const hash01 = (n) => {
+  let x = (n | 0) ^ 0x9e3779b9;
+  x = Math.imul(x, 0x85ebca6b);
+  x ^= x >>> 13;
+  x = Math.imul(x, 0xc2b2ae35);
+  x ^= x >>> 16;
+  return (x >>> 0) / 4294967296;
+};
 
-  // Background base (sidewalk tone)
-  ctx.fillStyle = "#2b2f3a";
-  ctx.fillRect(0, 0, view.w, view.h);
-
-  // Sidewalk tile pattern
-  const tile = 26;
-  ctx.fillStyle = "rgba(255,255,255,0.06)";
-  for (let y = 0; y < view.h + tile; y += tile) {
-    for (let x = 0; x < layout.roadLeft; x += tile) {
-      if (((x / tile) ^ (y / tile)) & 1) ctx.fillRect(x + 2, y + 2, tile - 4, tile - 4);
-    }
-    for (let x = layout.roadRight; x < view.w; x += tile) {
-      if (((x / tile) ^ (y / tile)) & 1) ctx.fillRect(x + 2, y + 2, tile - 4, tile - 4);
-    }
-  }
-
-  // Road shape (slight curve)
-  const segs = 18;
-  const leftXs = [];
-  const rightXs = [];
-  for (let i = 0; i <= segs; i++) {
-    const y = (i / segs) * view.h;
-    const off = curveAt(y);
-    leftXs.push(layout.roadLeft + off);
-    rightXs.push(layout.roadRight + off);
-  }
-
-  const rg = ctx.createLinearGradient(layout.roadLeft, 0, layout.roadRight, 0);
-  rg.addColorStop(0, "#1a1d26");
-  rg.addColorStop(0.5, "#171a22");
-  rg.addColorStop(1, "#1a1d26");
-  ctx.fillStyle = rg;
-  ctx.beginPath();
-  ctx.moveTo(leftXs[0], 0);
-  for (let i = 1; i < leftXs.length; i++) ctx.lineTo(leftXs[i], (i / segs) * view.h);
-  for (let i = rightXs.length - 1; i >= 0; i--) ctx.lineTo(rightXs[i], (i / segs) * view.h);
-  ctx.closePath();
+const drawCactus = (x, y, s) => {
+  const w = 10 * s;
+  const h = 28 * s;
+  ctx.fillStyle = "#0f8a3c";
+  drawRoundedRect(x - w / 2, y - h, w, h, 4 * s);
   ctx.fill();
+  // arms
+  drawRoundedRect(x - w * 1.05, y - h * 0.62, w * 0.75, h * 0.22, 4 * s);
+  ctx.fill();
+  drawRoundedRect(x + w * 0.30, y - h * 0.48, w * 0.75, h * 0.22, 4 * s);
+  ctx.fill();
+  // highlight
+  ctx.fillStyle = "rgba(255,255,255,0.18)";
+  drawRoundedRect(x - w * 0.15, y - h + 2 * s, w * 0.18, h - 4 * s, 3 * s);
+  ctx.fill();
+};
 
-  // Curbs + edge lines (segmented so they follow the curve)
-  const stripeStep = 14;
-  for (let y = 0; y < view.h + stripeStep; y += stripeStep) {
-    const off = curveAt(y + stripeStep * 0.5);
-    ctx.fillStyle = "#111318";
-    ctx.fillRect(layout.roadLeft - layout.curbW + off, y, layout.curbW, stripeStep);
-    ctx.fillRect(layout.roadRight + off, y, layout.curbW, stripeStep);
-    ctx.fillStyle = "rgba(255,215,0,0.35)";
-    ctx.fillRect(layout.roadLeft + 2 + off, y, 2, stripeStep);
-    ctx.fillRect(layout.roadRight - 4 + off, y, 2, stripeStep);
+const drawRock = (x, y, s) => {
+  const w = 18 * s;
+  const h = 10 * s;
+  ctx.fillStyle = "rgba(55,45,38,0.75)";
+  ctx.beginPath();
+  ctx.ellipse(x + 2 * s, y + 2 * s, w * 0.55, h * 0.55, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#6b5b4c";
+  ctx.beginPath();
+  ctx.ellipse(x, y, w * 0.55, h * 0.55, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.12)";
+  ctx.beginPath();
+  ctx.ellipse(x - 3 * s, y - 2 * s, w * 0.22, h * 0.22, 0, 0, Math.PI * 2);
+  ctx.fill();
+};
+
+const drawRoad = (scroll, tNow, theme) => {
+  void tNow;
+  const th = theme || "town";
+
+  // Shoulders (theme)
+  if (th === "desert") {
+    const sg = ctx.createLinearGradient(0, 0, 0, view.h);
+    sg.addColorStop(0, "#caa56a");
+    sg.addColorStop(1, "#a87a3f");
+    ctx.fillStyle = sg;
+    ctx.fillRect(0, 0, layout.roadLeft, view.h);
+    ctx.fillRect(layout.roadRight, 0, view.w - layout.roadRight, view.h);
+  } else if (th === "village") {
+    const gg = ctx.createLinearGradient(0, 0, 0, view.h);
+    gg.addColorStop(0, "#1f7a3a");
+    gg.addColorStop(1, "#114f25");
+    ctx.fillStyle = gg;
+    ctx.fillRect(0, 0, layout.roadLeft, view.h);
+    ctx.fillRect(layout.roadRight, 0, view.w - layout.roadRight, view.h);
+  } else {
+    // Town
+    ctx.fillStyle = "#2b2f3a";
+    ctx.fillRect(0, 0, layout.roadLeft, view.h);
+    ctx.fillRect(layout.roadRight, 0, view.w - layout.roadRight, view.h);
   }
+
+  // Town sidewalk tile pattern only
+  if (th === "town") {
+    const tile = 26;
+    ctx.fillStyle = "rgba(255,255,255,0.06)";
+    for (let y = 0; y < view.h + tile; y += tile) {
+      for (let x = 0; x < layout.roadLeft; x += tile) {
+        if (((x / tile) ^ (y / tile)) & 1) ctx.fillRect(x + 2, y + 2, tile - 4, tile - 4);
+      }
+      for (let x = layout.roadRight; x < view.w; x += tile) {
+        if (((x / tile) ^ (y / tile)) & 1) ctx.fillRect(x + 2, y + 2, tile - 4, tile - 4);
+      }
+    }
+  }
+
+  // Theme scenery (shoulders): cactus/rocks, trees, lamps
+  const spacing = 120;
+  const sceneryOffset = scroll % spacing;
+  const base = Math.floor(scroll / spacing);
+  for (let i = -1; i < Math.ceil(view.h / spacing) + 2; i++) {
+    const idx = base + i;
+    const y = -spacing + sceneryOffset + i * spacing;
+    const u = hash01(idx * 928371);
+    const u2 = hash01(idx * 928371 + 1337);
+    const sideLeft = u < 0.5;
+
+    if (th === "desert") {
+      // dune shadows
+      ctx.fillStyle = "rgba(0,0,0,0.08)";
+      ctx.beginPath();
+      const duneY = y + 58;
+      ctx.ellipse(layout.roadLeft * 0.55, duneY, layout.roadLeft * 0.45, 18, 0, 0, Math.PI * 2);
+      ctx.ellipse(layout.roadRight + (view.w - layout.roadRight) * 0.45, duneY + 12, (view.w - layout.roadRight) * 0.42, 20, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      const s = clamp(view.w / 520, 0.85, 1.2);
+      const leftMin = 16;
+      const leftMax = Math.max(leftMin + 1, layout.roadLeft - 26);
+      const rightMin = layout.roadRight + 26;
+      const rightMax = Math.max(rightMin + 1, view.w - 16);
+      const x = sideLeft ? lerp(leftMin, leftMax, u2) : lerp(rightMin, rightMax, u2);
+
+      if (u > 0.22) continue; // not every segment
+      if (hash01(idx * 17 + 9) < 0.55) drawCactus(x, y + 92, s);
+      else drawRock(x, y + 98, s);
+    } else if (th === "village") {
+      if (u > 0.30) continue;
+      const s = clamp(view.w / 540, 0.85, 1.15);
+      const leftMin = 14;
+      const leftMax = Math.max(leftMin + 1, layout.roadLeft - 22);
+      const rightMin = layout.roadRight + 22;
+      const rightMax = Math.max(rightMin + 1, view.w - 14);
+      const x = sideLeft ? lerp(leftMin, leftMax, u2) : lerp(rightMin, rightMax, u2);
+
+      // simple tree
+      ctx.fillStyle = "rgba(0,0,0,0.16)";
+      ctx.beginPath();
+      ctx.ellipse(x + 2 * s, y + 92 + 6 * s, 14 * s, 6 * s, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#145a2a";
+      ctx.beginPath();
+      ctx.ellipse(x, y + 92, 14 * s, 18 * s, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#0f3f1d";
+      ctx.beginPath();
+      ctx.ellipse(x + 6 * s, y + 88, 10 * s, 14 * s, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // town lamps (subtle glows)
+      if (u > 0.20) continue;
+      const s = clamp(view.w / 560, 0.9, 1.2);
+      const x = sideLeft ? layout.roadLeft - layout.curbW - 10 : layout.roadRight + layout.curbW + 10;
+      const ly = y + 70;
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(x - 1, ly - 22 * s, 2, 44 * s);
+      ctx.fillStyle = "rgba(255,215,0,0.22)";
+      ctx.beginPath();
+      ctx.ellipse(x + (sideLeft ? -8 : 8), ly + 6, 16 * s, 10 * s, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Curbs + edge lines
+  ctx.fillStyle = th === "desert" ? "rgba(0,0,0,0.35)" : "#111318";
+  ctx.fillRect(layout.roadLeft - layout.curbW, 0, layout.curbW, view.h);
+  ctx.fillRect(layout.roadRight, 0, layout.curbW, view.h);
+
+  ctx.fillStyle = th === "town" ? "rgba(255,215,0,0.35)" : "rgba(255,255,255,0.18)";
+  ctx.fillRect(layout.roadLeft + 2, 0, 2, view.h);
+  ctx.fillRect(layout.roadRight - 4, 0, 2, view.h);
+
+  // Road fill
+  const rg = ctx.createLinearGradient(layout.roadLeft, 0, layout.roadRight, 0);
+  if (th === "desert") {
+    rg.addColorStop(0, "#3a2f25");
+    rg.addColorStop(0.5, "#332a22");
+    rg.addColorStop(1, "#3a2f25");
+  } else if (th === "village") {
+    rg.addColorStop(0, "#1b1e26");
+    rg.addColorStop(0.5, "#181b22");
+    rg.addColorStop(1, "#1b1e26");
+  } else {
+    rg.addColorStop(0, "#1a1d26");
+    rg.addColorStop(0.5, "#171a22");
+    rg.addColorStop(1, "#1a1d26");
+  }
+  ctx.fillStyle = rg;
+  ctx.fillRect(layout.roadLeft, 0, layout.roadW, view.h);
 
   // Lane lines
   const period = 78;
   const dash = 36;
   const offset = scroll % period;
+  const laneAlpha = th === "desert" ? 0.16 : 0.22;
   for (let i = 1; i < layout.lanes; i++) {
     const x = layout.roadLeft + layout.laneW * i;
-    ctx.fillStyle = "rgba(255,255,255,0.22)";
-    for (let y = -period + offset; y < view.h + period; y += period) {
-      const off = curveAt(y + dash * 0.5);
-      ctx.fillRect(x - 2 + off, y, 4, dash);
-    }
+    ctx.fillStyle = `rgba(255,255,255,${laneAlpha})`;
+    for (let y = -period + offset; y < view.h + period; y += period) ctx.fillRect(x - 2, y, 4, dash);
   }
 };
 
@@ -889,7 +1088,7 @@ const render = () => {
   ctx.save();
   ctx.translate(ox, oy);
 
-  drawRoad(state.scroll, tNow);
+  drawRoad(state.scroll, tNow, state.roadTheme);
 
   // Objects
   for (const o of state.objects) {
@@ -938,17 +1137,6 @@ const render = () => {
     ctx.fillStyle = p.color;
     ctx.fillText(p.text, p.x, p.y);
     ctx.globalAlpha = 1;
-  }
-
-  // Paused label
-  if (state.mode === "paused") {
-    ctx.fillStyle = "rgba(0,0,0,0.45)";
-    ctx.fillRect(0, 0, view.w, view.h);
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.font = "900 40px ui-sans-serif, system-ui, Arial";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("PAUSED", view.w / 2, view.h / 2);
   }
 
   // Countdown label
@@ -1117,14 +1305,16 @@ const loop = (ts) => {
   update(dt);
 
   // Particles update (always)
-  for (const p of state.particles) {
-    p.life -= dt;
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-    p.vx *= 0.92;
-    p.vy *= 0.92;
+  if (state.mode !== "paused" && state.mode !== "menu") {
+    for (const p of state.particles) {
+      p.life -= dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.92;
+      p.vy *= 0.92;
+    }
+    state.particles = state.particles.filter((p) => p.life > 0);
   }
-  state.particles = state.particles.filter((p) => p.life > 0);
 
   // Popups update (always)
   if (state.mode !== "paused" && state.mode !== "menu") {
@@ -1141,4 +1331,5 @@ const loop = (ts) => {
 requestAnimationFrame(loop);
 
 loadPrefs();
-goHome();
+syncThemeButtons();
+showIntro();

@@ -11,10 +11,17 @@
     <main id="stage" aria-label="Game stage">
       <canvas id="game" aria-label="2D car racing canvas"></canvas>
 
+      <!-- INTRO -->
+      <section id="intro" class="intro overlay" aria-label="Intro">
+        <div class="introSmall">CREATED BY</div>
+        <div class="introLogo">DCP GAMING</div>
+        <div class="introHint">Tap to skip</div>
+      </section>
+
       <!-- HUD -->
       <div id="hud" class="hud hidden" aria-live="polite">
         <div class="hudLeft">
-          <button id="pauseBtn" class="iconBtn" aria-label="Pause">⏸</button>
+          <button id="pauseBtn" class="iconBtn" aria-label="Pause">&#x23F8;</button>
         </div>
         <div class="hudRight">
           <div class="hudStat"><span class="k">Score</span><span id="hudScore" class="v">0</span></div>
@@ -22,11 +29,49 @@
         </div>
       </div>
 
+      <!-- PAUSED -->
+      <section id="pauseOverlay" class="overlay hidden" aria-label="Paused">
+        <div class="pauseCard">
+          <div class="pauseTitle">PAUSED</div>
+          <div class="pauseBtns">
+            <button id="pauseHomeBtn" class="sqBtn" aria-label="Home">&#x2302;</button>
+            <button id="pauseRestartBtn" class="sqBtn" aria-label="Restart">&#x21BB;</button>
+          </div>
+        </div>
+      </section>
+
       <!-- MENU -->
-      <section id="menu" class="overlay" aria-label="Main menu">
+      <section id="menu" class="overlay hidden" aria-label="Main menu">
         <div class="title">
           <div class="titleLine">RUSH</div>
           <div class="titleLine">RACING</div>
+        </div>
+
+        <div class="themePicker" aria-label="Road type">
+          <div class="themePickerLabel">CHOOSE ROAD</div>
+          <div class="themePickerBtns">
+            <button type="button" class="themeBtn active" data-theme="town" aria-pressed="true">
+              <span class="themePreview themePreview--town" aria-hidden="true"></span>
+              <span class="themeMeta">
+                <span class="themeName">Town</span>
+                <span class="themeDesc">Street lights + sidewalks</span>
+              </span>
+            </button>
+            <button type="button" class="themeBtn" data-theme="village" aria-pressed="false">
+              <span class="themePreview themePreview--village" aria-hidden="true"></span>
+              <span class="themeMeta">
+                <span class="themeName">Village</span>
+                <span class="themeDesc">Grass + trees</span>
+              </span>
+            </button>
+            <button type="button" class="themeBtn" data-theme="desert" aria-pressed="false">
+              <span class="themePreview themePreview--desert" aria-hidden="true"></span>
+              <span class="themeMeta">
+                <span class="themeName">Desert</span>
+                <span class="themeDesc">Cactus + rocks</span>
+              </span>
+            </button>
+          </div>
         </div>
 
         <button id="playBtn" class="playBtn" aria-label="Play">
@@ -34,7 +79,7 @@
         </button>
 
         <button id="soundBtn" class="soundBtn" aria-label="Sound">
-          <span id="soundIcon">🔊</span>
+          <span id="soundIcon">&#x1F50A;</span>
         </button>
 
         
@@ -48,16 +93,16 @@
           <div class="gameOverStat">High Score: <span id="goBest">0</span></div>
           <div id="goNew" class="gameOverNew hidden">NEW</div>
           <div class="gameOverBtns">
-            <button id="homeBtn" class="sqBtn" aria-label="Home">⌂</button>
-            <button id="restartBtn" class="sqBtn" aria-label="Restart">↻</button>
+            <button id="homeBtn" class="sqBtn" aria-label="Home">&#x2302;</button>
+            <button id="restartBtn" class="sqBtn" aria-label="Restart">&#x21BB;</button>
           </div>
         </div>
       </section>
 
       <!-- Touch -->
       <div id="touch" class="touch hidden" aria-label="Touch controls">
-        <button class="touchBtn" data-touch="left" aria-label="Left">◀</button>
-        <button class="touchBtn" data-touch="right" aria-label="Right">▶</button>
+        <button class="touchBtn" data-touch="left" aria-label="Left">&#x25C0;</button>
+        <button class="touchBtn" data-touch="right" aria-label="Right">&#x25B6;</button>
       </div>
     </main>
   </div>
