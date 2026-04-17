@@ -163,8 +163,10 @@ const state = {
   pauseReturnMode: "playing",
 
   spawnT: 0,
-  objects: [], // traffic + obstacles
+  objects: [], // traffic
   particles: [],
+  popups: [],
+  bonus: 0,
 };
 
 const loadPrefs = () => {
@@ -262,12 +264,13 @@ const pickSafeLane = (spawnY, spawnH) => {
   return null;
 };
 
-const spawnTraffic = () => {
+const spawnTraffic = (difficulty01 = 0) => {
+  const d = clamp(difficulty01, 0, 1);
   const vehicleTypes = [
-    { type: "car", w: 1.0, h: 1.0, weight: 6 },
-    { type: "police", w: 1.0, h: 1.0, weight: 2 },
-    { type: "ambulance", w: 1.02, h: 1.04, weight: 2 },
-    { type: "truck", w: 1.08, h: 1.22, weight: 2 },
+    { type: "car", w: 1.0, h: 1.0, weight: lerp(7.2, 3.4, d) },
+    { type: "police", w: 1.0, h: 1.0, weight: lerp(1.4, 2.2, d) },
+    { type: "ambulance", w: 1.02, h: 1.04, weight: lerp(1.3, 2.0, d) },
+    { type: "truck", w: 1.08, h: 1.22, weight: lerp(1.1, 3.1, d) },
   ];
   const totalW = vehicleTypes.reduce((a, t) => a + t.weight, 0);
   let r = Math.random() * totalW;
@@ -287,16 +290,21 @@ const spawnTraffic = () => {
   if (lane === null) return false;
   const x = laneCenterX(lane);
   let color = "#ff8a00";
+  let outline = "rgba(255,255,255,0.35)";
   if (picked.type === "car") {
     const palette = ["#ff8a00", "#22c55e", "#60a5fa", "#a78bfa", "#fb7185", "#fbbf24"];
     color = palette[randInt(0, palette.length - 1)];
+    outline = "rgba(255,255,255,0.30)";
   } else if (picked.type === "police") {
     color = "#f8fafc";
+    outline = "rgba(17,24,39,0.55)";
   } else if (picked.type === "ambulance") {
     color = "#f8fafc";
+    outline = "rgba(17,24,39,0.55)";
   } else if (picked.type === "truck") {
     const palette = ["#f97316", "#22c55e", "#60a5fa"];
     color = palette[randInt(0, palette.length - 1)];
+    outline = "rgba(255,255,255,0.28)";
   }
 
   state.objects.push({
@@ -308,29 +316,23 @@ const spawnTraffic = () => {
     w,
     h,
     color,
+    outline,
     scored: false,
+    near: false,
   });
   return true;
 };
 
-const spawnObstacle = () => {
-  const type = Math.random() < 0.78 ? "cone" : "barrier";
-  const w = type === "cone" ? layout.carW * 0.42 : layout.laneW * 0.92;
-  const h = type === "cone" ? layout.carW * 0.42 : layout.carW * 0.22;
-  const y = -rand(110, 260);
-  const lane = pickSafeLane(y, h);
-  if (lane === null) return false;
-  state.objects.push({
-    kind: "obstacle",
-    type,
-    lane,
-    x: laneCenterX(lane),
+const addPopup = (x, y, text, color = "rgba(255,255,255,0.95)") => {
+  state.popups.push({
+    x,
     y,
-    w,
-    h,
-    color: type === "cone" ? "#fbbf24" : "#ef4444",
+    text,
+    color,
+    life: 0.9,
+    max: 0.9,
+    vy: -38,
   });
-  return true;
 };
 
 const addParticles = (x, y, count, baseColor) => {
@@ -383,11 +385,13 @@ const startGame = () => {
   state.scroll = 0;
   state.score = 0;
   state.passed = 0;
+  state.bonus = 0;
   state.lane = 1;
   state.x = laneCenterX(state.lane);
   state.spawnT = 0;
   state.objects = [];
   state.particles = [];
+  state.popups = [];
   state.crashT = 0;
   state.shakeT = 0;
   state.shakeMag = 0;
@@ -402,8 +406,7 @@ const startGame = () => {
   hudBest.textContent = String(state.best);
 
   // Seed
-  for (let i = 0; i < 2; i++) spawnTraffic();
-  for (let i = 0; i < 1; i++) spawnObstacle();
+  for (let i = 0; i < 3; i++) spawnTraffic(0);
 };
 
 const goHome = () => {
@@ -501,11 +504,14 @@ const drawRoundedRect = (x, y, w, h, r) => {
   ctx.closePath();
 };
 
-const drawRoad = (scroll) => {
-  // Sidewalks
+const drawRoad = (scroll, tNow) => {
+  const curveDir = Math.sin(tNow * 0.17);
+  const curveMag = curveDir * clamp(view.w * 0.10, 14, 46);
+  const curveAt = (y) => curveMag * Math.pow(clamp(y / view.h, 0, 1), 2);
+
+  // Background base (sidewalk tone)
   ctx.fillStyle = "#2b2f3a";
-  ctx.fillRect(0, 0, layout.roadLeft, view.h);
-  ctx.fillRect(layout.roadRight, 0, view.w - layout.roadRight, view.h);
+  ctx.fillRect(0, 0, view.w, view.h);
 
   // Sidewalk tile pattern
   const tile = 26;
@@ -519,22 +525,40 @@ const drawRoad = (scroll) => {
     }
   }
 
-  // Curbs + edge lines
-  ctx.fillStyle = "#111318";
-  ctx.fillRect(layout.roadLeft - layout.curbW, 0, layout.curbW, view.h);
-  ctx.fillRect(layout.roadRight, 0, layout.curbW, view.h);
+  // Road shape (slight curve)
+  const segs = 18;
+  const leftXs = [];
+  const rightXs = [];
+  for (let i = 0; i <= segs; i++) {
+    const y = (i / segs) * view.h;
+    const off = curveAt(y);
+    leftXs.push(layout.roadLeft + off);
+    rightXs.push(layout.roadRight + off);
+  }
 
-  ctx.fillStyle = "rgba(255,215,0,0.35)";
-  ctx.fillRect(layout.roadLeft + 2, 0, 2, view.h);
-  ctx.fillRect(layout.roadRight - 4, 0, 2, view.h);
-
-  // Road fill
   const rg = ctx.createLinearGradient(layout.roadLeft, 0, layout.roadRight, 0);
   rg.addColorStop(0, "#1a1d26");
   rg.addColorStop(0.5, "#171a22");
   rg.addColorStop(1, "#1a1d26");
   ctx.fillStyle = rg;
-  ctx.fillRect(layout.roadLeft, 0, layout.roadW, view.h);
+  ctx.beginPath();
+  ctx.moveTo(leftXs[0], 0);
+  for (let i = 1; i < leftXs.length; i++) ctx.lineTo(leftXs[i], (i / segs) * view.h);
+  for (let i = rightXs.length - 1; i >= 0; i--) ctx.lineTo(rightXs[i], (i / segs) * view.h);
+  ctx.closePath();
+  ctx.fill();
+
+  // Curbs + edge lines (segmented so they follow the curve)
+  const stripeStep = 14;
+  for (let y = 0; y < view.h + stripeStep; y += stripeStep) {
+    const off = curveAt(y + stripeStep * 0.5);
+    ctx.fillStyle = "#111318";
+    ctx.fillRect(layout.roadLeft - layout.curbW + off, y, layout.curbW, stripeStep);
+    ctx.fillRect(layout.roadRight + off, y, layout.curbW, stripeStep);
+    ctx.fillStyle = "rgba(255,215,0,0.35)";
+    ctx.fillRect(layout.roadLeft + 2 + off, y, 2, stripeStep);
+    ctx.fillRect(layout.roadRight - 4 + off, y, 2, stripeStep);
+  }
 
   // Lane lines
   const period = 78;
@@ -543,8 +567,40 @@ const drawRoad = (scroll) => {
   for (let i = 1; i < layout.lanes; i++) {
     const x = layout.roadLeft + layout.laneW * i;
     ctx.fillStyle = "rgba(255,255,255,0.22)";
-    for (let y = -period + offset; y < view.h + period; y += period) ctx.fillRect(x - 2, y, 4, dash);
+    for (let y = -period + offset; y < view.h + period; y += period) {
+      const off = curveAt(y + dash * 0.5);
+      ctx.fillRect(x - 2 + off, y, 4, dash);
+    }
   }
+};
+
+const sportCarBodyPath = (left, top, w, h) => {
+  const cx = left + w / 2;
+  const capW = w * 0.30;
+  const yTop = top + h * 0.03;
+  const yBottom = top + h * 0.97;
+
+  const shoulderY = top + h * 0.18;
+  const waistY = top + h * 0.52;
+  const tailY = top + h * 0.84;
+
+  const halfShoulder = w * 0.46;
+  const halfWaist = w * 0.36;
+  const halfTail = w * 0.44;
+
+  ctx.beginPath();
+  ctx.moveTo(cx - capW / 2, yTop);
+  ctx.lineTo(cx + capW / 2, yTop);
+  ctx.bezierCurveTo(cx + w * 0.52, yTop + h * 0.02, cx + halfShoulder, top + h * 0.08, cx + halfShoulder, shoulderY);
+  ctx.bezierCurveTo(cx + halfShoulder, top + h * 0.30, cx + halfWaist, top + h * 0.36, cx + halfWaist, waistY);
+  ctx.bezierCurveTo(cx + halfWaist, top + h * 0.68, cx + halfTail, top + h * 0.72, cx + halfTail, tailY);
+  ctx.bezierCurveTo(cx + halfTail, top + h * 0.92, cx + w * 0.22, yBottom, cx + capW / 2, yBottom);
+  ctx.lineTo(cx - capW / 2, yBottom);
+  ctx.bezierCurveTo(cx - w * 0.22, yBottom, cx - halfTail, top + h * 0.92, cx - halfTail, tailY);
+  ctx.bezierCurveTo(cx - halfTail, top + h * 0.72, cx - halfWaist, top + h * 0.68, cx - halfWaist, waistY);
+  ctx.bezierCurveTo(cx - halfWaist, top + h * 0.36, cx - halfShoulder, top + h * 0.30, cx - halfShoulder, shoulderY);
+  ctx.bezierCurveTo(cx - halfShoulder, top + h * 0.08, cx - w * 0.52, yTop + h * 0.02, cx - capW / 2, yTop);
+  ctx.closePath();
 };
 
 const drawSportCar = (x, y, w, h) => {
@@ -554,28 +610,39 @@ const drawSportCar = (x, y, w, h) => {
 
   ctx.save();
 
-  // Glow effect (like your snippet)
-  ctx.shadowColor = "red";
-  ctx.shadowBlur = 20 * s;
+  // Shadow (no glow/blur)
+  ctx.fillStyle = "rgba(0,0,0,0.38)";
+  sportCarBodyPath(left + 4 * s, top + 6 * s, w, h);
+  ctx.fill();
 
-  // Main body gradient
+  // Main body
   const bodyGrad = ctx.createLinearGradient(left, top, left, top + h);
   bodyGrad.addColorStop(0, "#ff4d4d");
   bodyGrad.addColorStop(0.5, "#ff0000");
   bodyGrad.addColorStop(1, "#990000");
   ctx.fillStyle = bodyGrad;
-  drawRoundedRect(left, top, w, h, 15 * s);
+  sportCarBodyPath(left, top, w, h);
   ctx.fill();
 
-  ctx.shadowBlur = 0;
+  // Body outline
+  ctx.strokeStyle = "rgba(0,0,0,0.55)";
+  ctx.lineWidth = Math.max(1.5, 2.2 * s);
+  ctx.stroke();
 
   // Windshield
-  ctx.fillStyle = "#1a1a1a";
-  drawRoundedRect(left + 10 * s, top + 10 * s, w - 20 * s, 22 * s, 6 * s);
+  const glass = "rgba(10,12,16,0.85)";
+  ctx.fillStyle = glass;
+  const winW = w * 0.64;
+  const winX = left + (w - winW) / 2;
+  const winH = h * 0.20;
+  const winY = top + h * 0.20;
+  drawRoundedRect(winX, winY, winW, winH, 10 * s);
   ctx.fill();
 
   // Back glass
-  drawRoundedRect(left + 10 * s, top + h - 32 * s, w - 20 * s, 20 * s, 6 * s);
+  const backH = h * 0.18;
+  const backY = top + h * 0.66;
+  drawRoundedRect(winX, backY, winW, backH, 10 * s);
   ctx.fill();
 
   // Inner highlight (depth)
@@ -583,23 +650,34 @@ const drawSportCar = (x, y, w, h) => {
   innerGrad.addColorStop(0, "rgba(255,255,255,0.30)");
   innerGrad.addColorStop(1, "rgba(255,255,255,0.0)");
   ctx.fillStyle = innerGrad;
-  drawRoundedRect(left + 5 * s, top + 5 * s, w - 10 * s, h - 10 * s, 12 * s);
+  sportCarBodyPath(left + w * 0.06, top + h * 0.04, w * 0.88, h * 0.92);
   ctx.fill();
 
   // Side shadows (3D look)
   ctx.fillStyle = "rgba(0,0,0,0.40)";
-  ctx.fillRect(left + 5 * s, top + 20 * s, 4 * s, h - 40 * s);
-  ctx.fillRect(left + w - 9 * s, top + 20 * s, 4 * s, h - 40 * s);
+  ctx.fillRect(left + 6 * s, top + 22 * s, 4 * s, h - 44 * s);
+  ctx.fillRect(left + w - 10 * s, top + 22 * s, 4 * s, h - 44 * s);
 
   // Wheels
-  ctx.fillStyle = "#111";
-  drawRoundedRect(left - 3 * s, top + 25 * s, 6 * s, 20 * s, 3 * s);
+  ctx.fillStyle = "#0b0d12";
+  const wheelW = Math.max(7 * s, w * 0.12);
+  const wheelH = h * 0.18;
+  const wheelX1 = left - wheelW * 0.55;
+  const wheelX2 = left + w - wheelW * 0.45;
+  const wheelY1 = top + h * 0.24;
+  const wheelY2 = top + h * 0.62;
+  drawRoundedRect(wheelX1, wheelY1, wheelW, wheelH, wheelW * 0.45);
   ctx.fill();
-  drawRoundedRect(left + w - 3 * s, top + 25 * s, 6 * s, 20 * s, 3 * s);
+  drawRoundedRect(wheelX2, wheelY1, wheelW, wheelH, wheelW * 0.45);
   ctx.fill();
-  drawRoundedRect(left - 3 * s, top + h - 45 * s, 6 * s, 20 * s, 3 * s);
+  drawRoundedRect(wheelX1, wheelY2, wheelW, wheelH, wheelW * 0.45);
   ctx.fill();
-  drawRoundedRect(left + w - 3 * s, top + h - 45 * s, 6 * s, 20 * s, 3 * s);
+  drawRoundedRect(wheelX2, wheelY2, wheelW, wheelH, wheelW * 0.45);
+  ctx.fill();
+
+  // Center highlight panel
+  ctx.fillStyle = "rgba(255,255,255,0.14)";
+  drawRoundedRect(left + w * 0.30, top + h * 0.32, w * 0.40, h * 0.16, 10 * s);
   ctx.fill();
 
   ctx.restore();
@@ -609,10 +687,116 @@ const drawCar = (x, y, w, h, body, outline, isPlayer = false, vehicle = "car", b
   const left = x - w / 2;
   const top = y - h / 2;
   const r = Math.min(14, w * 0.34);
+  const s = w / 50;
 
   // Player uses the sport sprite; traffic cars keep the simpler style.
   if (vehicle === "car" && isPlayer) {
     drawSportCar(x, y, w, h);
+    return;
+  }
+
+  if (vehicle !== "truck") {
+    // Shadow (no glow/blur)
+    ctx.fillStyle = "rgba(0,0,0,0.38)";
+    sportCarBodyPath(left + 3 * s, top + 5 * s, w, h);
+    ctx.fill();
+
+    // Body
+    sportCarBodyPath(left, top, w, h);
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = body;
+    ctx.fillRect(left - 2, top - 2, w + 4, h + 4);
+
+    const shade = ctx.createLinearGradient(0, top, 0, top + h);
+    shade.addColorStop(0, "rgba(255,255,255,0.20)");
+    shade.addColorStop(0.42, "rgba(255,255,255,0.04)");
+    shade.addColorStop(1, "rgba(0,0,0,0.26)");
+    ctx.fillStyle = shade;
+    ctx.fillRect(left - 2, top - 2, w + 4, h + 4);
+
+    // Decals
+    if (vehicle === "police") {
+      ctx.fillStyle = "rgba(29,78,216,0.95)";
+      ctx.fillRect(left + w * 0.12, top + h * 0.52, w * 0.76, h * 0.12);
+      ctx.fillStyle = "rgba(255,255,255,0.55)";
+      ctx.fillRect(left + w * 0.12, top + h * 0.50, w * 0.76, h * 0.02);
+      ctx.fillRect(left + w * 0.12, top + h * 0.64, w * 0.76, h * 0.02);
+    }
+    if (vehicle === "ambulance") {
+      ctx.fillStyle = "rgba(239,68,68,0.95)";
+      ctx.fillRect(left + w * 0.12, top + h * 0.56, w * 0.76, h * 0.10);
+      ctx.fillStyle = "rgba(29,78,216,0.95)";
+      const cx = left + w * 0.72;
+      const cy = top + h * 0.36;
+      ctx.fillRect(cx - w * 0.06, cy - h * 0.04, w * 0.12, h * 0.08);
+      ctx.fillRect(cx - w * 0.03, cy - h * 0.09, w * 0.06, h * 0.18);
+    }
+
+    // Hood ridge highlight
+    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    drawRoundedRect(left + w * 0.32, top + h * 0.28, w * 0.36, h * 0.44, 10 * s);
+    ctx.fill();
+
+    ctx.restore();
+
+    // Outline
+    sportCarBodyPath(left, top, w, h);
+    ctx.strokeStyle = outline;
+    ctx.lineWidth = isPlayer ? 3 : 2;
+    ctx.stroke();
+
+    // Windows
+    ctx.fillStyle = "rgba(12,14,18,0.78)";
+    const winW = w * 0.64;
+    const winX = left + (w - winW) / 2;
+    const winH = h * 0.20;
+    drawRoundedRect(winX, top + h * 0.20, winW, winH, 10 * s);
+    ctx.fill();
+    drawRoundedRect(winX, top + h * 0.66, winW, h * 0.18, 10 * s);
+    ctx.fill();
+
+    // Headlights + tail lights
+    const lw = w * 0.16;
+    const lh = Math.max(2, h * 0.035);
+    ctx.fillStyle = "rgba(255,255,255,0.62)";
+    ctx.fillRect(left + w * 0.18, top + h * 0.06, lw, lh);
+    ctx.fillRect(left + w * 0.66, top + h * 0.06, lw, lh);
+    ctx.fillStyle = "rgba(239,68,68,0.72)";
+    ctx.fillRect(left + w * 0.18, top + h * 0.91, lw, lh);
+    ctx.fillRect(left + w * 0.66, top + h * 0.91, lw, lh);
+
+    // Wheels (rounded)
+    ctx.fillStyle = "#0b0d12";
+    const wheelW = Math.max(7 * s, w * 0.12);
+    const wheelH = h * 0.18;
+    const wheelX1 = left - wheelW * 0.55;
+    const wheelX2 = left + w - wheelW * 0.45;
+    const wheelY1 = top + h * 0.24;
+    const wheelY2 = top + h * 0.62;
+    drawRoundedRect(wheelX1, wheelY1, wheelW, wheelH, wheelW * 0.45);
+    ctx.fill();
+    drawRoundedRect(wheelX2, wheelY1, wheelW, wheelH, wheelW * 0.45);
+    ctx.fill();
+    drawRoundedRect(wheelX1, wheelY2, wheelW, wheelH, wheelW * 0.45);
+    ctx.fill();
+    drawRoundedRect(wheelX2, wheelY2, wheelW, wheelH, wheelW * 0.45);
+    ctx.fill();
+
+    // Light bars
+    if (vehicle === "police") {
+      const blink = Math.sin(blinkT * 12) > 0 ? 1 : 0;
+      ctx.fillStyle = blink ? "rgba(96,165,250,0.95)" : "rgba(239,68,68,0.95)";
+      drawRoundedRect(left + w * 0.28, top + h * 0.12, w * 0.44, h * 0.07, 6);
+      ctx.fill();
+    }
+    if (vehicle === "ambulance") {
+      const blink = Math.sin(blinkT * 10) > 0 ? 1 : 0;
+      ctx.fillStyle = blink ? "rgba(239,68,68,0.95)" : "rgba(96,165,250,0.95)";
+      drawRoundedRect(left + w * 0.30, top + h * 0.12, w * 0.40, h * 0.065, 6);
+      ctx.fill();
+    }
+
     return;
   }
 
@@ -621,119 +805,76 @@ const drawCar = (x, y, w, h, body, outline, isPlayer = false, vehicle = "car", b
   drawRoundedRect(left + 4, top + 6, w, h, r);
   ctx.fill();
 
-  // Body (varies per vehicle)
-  if (vehicle === "truck") {
-    const cabinH = h * 0.34;
-    const trailerH = h - cabinH;
-    // Trailer
-    ctx.fillStyle = body;
-    drawRoundedRect(left, top, w, trailerH, r);
-    ctx.fill();
-    // Cabin
-    ctx.fillStyle = "#111827";
-    drawRoundedRect(left, top + trailerH - 2, w, cabinH + 2, r);
-    ctx.fill();
-    ctx.fillStyle = "rgba(255,255,255,0.10)";
-    drawRoundedRect(left + w * 0.12, top + trailerH + cabinH * 0.18, w * 0.76, cabinH * 0.30, r * 0.6);
-    ctx.fill();
-  } else {
-    const g = ctx.createLinearGradient(0, top, 0, top + h);
-    g.addColorStop(0, body);
-    g.addColorStop(1, "#0b0b0d");
-    ctx.fillStyle = g;
-    drawRoundedRect(left, top, w, h, r);
-    ctx.fill();
-  }
+  // Truck body (cabin front + trailer rear)
+  const cabinH = h * 0.34;
+  const trailerH = h - cabinH;
+  const cabinY = top;
+  const trailerY = top + cabinH - 2;
+
+  // Trailer
+  const tg = ctx.createLinearGradient(0, trailerY, 0, trailerY + trailerH);
+  tg.addColorStop(0, body);
+  tg.addColorStop(1, "rgba(0,0,0,0.22)");
+  ctx.fillStyle = tg;
+  drawRoundedRect(left, trailerY, w, trailerH + 2, r);
+  ctx.fill();
+
+  // Cabin
+  const cg = ctx.createLinearGradient(0, cabinY, 0, cabinY + cabinH);
+  cg.addColorStop(0, "#111827");
+  cg.addColorStop(1, "#0b0f18");
+  ctx.fillStyle = cg;
+  drawRoundedRect(left, cabinY, w, cabinH + 2, r);
+  ctx.fill();
+
+  // Cabin windshield
+  ctx.fillStyle = "rgba(12,14,18,0.78)";
+  drawRoundedRect(left + w * 0.18, cabinY + cabinH * 0.18, w * 0.64, cabinH * 0.34, r * 0.6);
+  ctx.fill();
+
+  // Trailer panel lines
+  ctx.strokeStyle = "rgba(0,0,0,0.22)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(left + w * 0.18, trailerY + trailerH * 0.16);
+  ctx.lineTo(left + w * 0.18, trailerY + trailerH * 0.92);
+  ctx.moveTo(left + w * 0.82, trailerY + trailerH * 0.16);
+  ctx.lineTo(left + w * 0.82, trailerY + trailerH * 0.92);
+  ctx.stroke();
+
+  // Headlights + rear lights
+  const lw = w * 0.14;
+  const lh = Math.max(2, h * 0.03);
+  ctx.fillStyle = "rgba(255,255,255,0.60)";
+  ctx.fillRect(left + w * 0.16, cabinY + cabinH * 0.06, lw, lh);
+  ctx.fillRect(left + w * 0.70, cabinY + cabinH * 0.06, lw, lh);
+  ctx.fillStyle = "rgba(239,68,68,0.72)";
+  ctx.fillRect(left + w * 0.16, trailerY + trailerH * 0.92, lw, lh);
+  ctx.fillRect(left + w * 0.70, trailerY + trailerH * 0.92, lw, lh);
 
   // Outline
   ctx.strokeStyle = outline;
   ctx.lineWidth = isPlayer ? 3 : 2;
+  drawRoundedRect(left, cabinY, w, cabinH + 2, r);
   ctx.stroke();
-
-  // Windows
-  ctx.fillStyle = "rgba(20,22,30,0.65)";
-  const winTop = vehicle === "truck" ? top + h * 0.58 : top + h * 0.18;
-  const winH = vehicle === "truck" ? h * 0.18 : h * 0.32;
-  drawRoundedRect(left + w * 0.18, winTop, w * 0.64, winH, r * 0.7);
-  ctx.fill();
-
-  // Hood highlight
-  ctx.fillStyle = "rgba(255,255,255,0.10)";
-  if (vehicle !== "truck") {
-    drawRoundedRect(left + w * 0.16, top + h * 0.10, w * 0.22, h * 0.78, r * 0.6);
-    ctx.fill();
-  }
+  drawRoundedRect(left, trailerY, w, trailerH + 2, r);
+  ctx.stroke();
 
   // Wheels
-  ctx.fillStyle = "#0a0a0f";
-  ctx.fillRect(left - 4, top + h * 0.15, 7, h * 0.25);
-  ctx.fillRect(left - 4, top + h * 0.60, 7, h * 0.25);
-  ctx.fillRect(left + w - 3, top + h * 0.15, 7, h * 0.25);
-  ctx.fillRect(left + w - 3, top + h * 0.60, 7, h * 0.25);
-
-  // Police / ambulance decals
-  if (vehicle === "police") {
-    ctx.fillStyle = "#1d4ed8";
-    ctx.fillRect(left + w * 0.10, top + h * 0.52, w * 0.80, h * 0.12);
-    // Light bar (blink)
-    const blink = (Math.sin(blinkT * 12) > 0) ? 1 : 0;
-    ctx.fillStyle = blink ? "rgba(96,165,250,0.95)" : "rgba(239,68,68,0.95)";
-    drawRoundedRect(left + w * 0.28, top + h * 0.08, w * 0.44, h * 0.07, 6);
+  ctx.fillStyle = "#0b0d12";
+  const wheelW = Math.max(7 * s, w * 0.11);
+  const wheelH = h * 0.14;
+  const wheelX1 = left - wheelW * 0.55;
+  const wheelX2 = left + w - wheelW * 0.45;
+  const ax1 = cabinY + cabinH * 0.70;
+  const ax2 = trailerY + trailerH * 0.56;
+  const ax3 = trailerY + trailerH * 0.78;
+  for (const wy of [ax1, ax2, ax3]) {
+    drawRoundedRect(wheelX1, wy, wheelW, wheelH, wheelW * 0.45);
+    ctx.fill();
+    drawRoundedRect(wheelX2, wy, wheelW, wheelH, wheelW * 0.45);
     ctx.fill();
   }
-  if (vehicle === "ambulance") {
-    ctx.fillStyle = "#ef4444";
-    ctx.fillRect(left + w * 0.10, top + h * 0.55, w * 0.80, h * 0.10);
-    // Cross
-    ctx.fillStyle = "#2563eb";
-    const cx = left + w * 0.72;
-    const cy = top + h * 0.26;
-    ctx.fillRect(cx - w * 0.06, cy - h * 0.04, w * 0.12, h * 0.08);
-    ctx.fillRect(cx - w * 0.03, cy - h * 0.09, w * 0.06, h * 0.18);
-  }
-
-  // Player glow
-  if (isPlayer) {
-    ctx.strokeStyle = "rgba(103,232,249,0.35)";
-    ctx.lineWidth = 10;
-    drawRoundedRect(left + 1, top + 1, w - 2, h - 2, r);
-    ctx.stroke();
-  }
-};
-
-const drawObstacle = (o) => {
-  const left = o.x - o.w / 2;
-  const top = o.y - o.h / 2;
-  if (o.type === "cone") {
-    ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.beginPath();
-    ctx.ellipse(o.x + 2, o.y + 10, o.w * 0.7, o.h * 0.45, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = o.color;
-    ctx.beginPath();
-    ctx.moveTo(o.x, top);
-    ctx.lineTo(left, top + o.h);
-    ctx.lineTo(left + o.w, top + o.h);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.65)";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    return;
-  }
-
-  // barrier
-  ctx.fillStyle = "rgba(0,0,0,0.35)";
-  drawRoundedRect(left + 4, top + 4, o.w, o.h, 8);
-  ctx.fill();
-
-  ctx.fillStyle = o.color;
-  drawRoundedRect(left, top, o.w, o.h, 8);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.65)";
-  ctx.lineWidth = 2;
-  ctx.stroke();
 };
 
 const render = () => {
@@ -748,12 +889,12 @@ const render = () => {
   ctx.save();
   ctx.translate(ox, oy);
 
-  drawRoad(state.scroll);
+  drawRoad(state.scroll, tNow);
 
   // Objects
   for (const o of state.objects) {
-    if (o.kind === "traffic") drawCar(o.x, o.y, o.w, o.h, o.color, "rgba(255,255,255,0.35)", false, o.vehicle || "car", tNow);
-    else drawObstacle(o);
+    if (o.kind !== "traffic") continue;
+    drawCar(o.x, o.y, o.w, o.h, o.color, o.outline || "rgba(255,255,255,0.35)", false, o.vehicle || "car", tNow);
   }
 
   // Player
@@ -768,6 +909,35 @@ const render = () => {
     ctx.beginPath();
     ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  // Day/night tint (keeps UI/popups readable by drawing before them)
+  const day = (Math.sin(tNow * 0.06) + 1) / 2;
+  const night = smoothstep(0.18, 0.85, 1 - day);
+  if (night > 0.001) {
+    ctx.fillStyle = `rgba(10,12,24,${night * 0.34})`;
+    ctx.fillRect(0, 0, view.w, view.h);
+
+    const vg = ctx.createRadialGradient(view.w / 2, view.h * 0.55, Math.min(view.w, view.h) * 0.25, view.w / 2, view.h * 0.55, Math.max(view.w, view.h) * 0.75);
+    vg.addColorStop(0, `rgba(0,0,0,${night * 0.0})`);
+    vg.addColorStop(1, `rgba(0,0,0,${night * 0.42})`);
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, view.w, view.h);
+  }
+
+  // Popups
+  for (const p of state.popups) {
+    const a = clamp(p.life / p.max, 0, 1);
+    ctx.globalAlpha = a;
+    ctx.font = "900 18px ui-sans-serif, system-ui, Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.strokeText(p.text, p.x, p.y);
+    ctx.fillStyle = p.color;
+    ctx.fillText(p.text, p.x, p.y);
+    ctx.globalAlpha = 1;
   }
 
   // Paused label
@@ -861,14 +1031,18 @@ const update = (dt) => {
   state.scroll += state.speed * dt;
   state.distance += state.speed * dt * 0.001;
 
-  // Spawn: mix of traffic and obstacles
+  const difficulty01 = clamp(1 - Math.exp(-state.score / 2600), 0, 1);
+
+  // Spawn traffic
   state.spawnT -= dt;
   if (state.spawnT <= 0) {
     let spawned = false;
-    for (let attempts = 0; attempts < 3 && !spawned; attempts++) {
-      spawned = Math.random() < 0.78 ? spawnTraffic() : spawnObstacle();
+    for (let attempts = 0; attempts < 4 && !spawned; attempts++) {
+      spawned = spawnTraffic(difficulty01);
     }
-    state.spawnT = spawned ? rand(0.55, 0.95) : 0.18;
+    const minGap = lerp(0.58, 0.32, difficulty01);
+    const maxGap = lerp(0.98, 0.55, difficulty01);
+    state.spawnT = spawned ? rand(minGap, maxGap) : 0.16;
   }
 
   // Move objects down
@@ -882,22 +1056,54 @@ const update = (dt) => {
     if (o.y > playerY + layout.carH * 0.65) {
       o.scored = true;
       state.passed += 1;
+      addPopup(o.x, playerY - layout.carH * 0.35, "+7", "rgba(34,197,94,0.95)");
     }
   }
-  state.score = Math.floor(state.distance * 100) + state.passed * 7;
+  const baseScore = Math.floor(state.distance * 100) + state.passed * 7;
 
   // Collision
   const pw = layout.carW * 0.86;
   const ph = layout.carH * 0.86;
   const px = state.x;
+  const nearPadX = Math.max(10, layout.laneW * 0.06);
+  const nearPadY = layout.carH * 0.10;
   for (const o of state.objects) {
-    const ow = o.kind === "traffic" ? o.w * 0.86 : o.w;
-    const oh = o.kind === "traffic" ? o.h * 0.86 : o.h;
-    if (!rectOverlap(px, playerY, pw, ph, o.x, o.y, ow, oh)) continue;
-    crash();
-    break;
+    if (o.kind !== "traffic") continue;
+    const ow = o.w * 0.86;
+    const oh = o.h * 0.86;
+
+    const hit = rectOverlap(px, playerY, pw, ph, o.x, o.y, ow, oh);
+    if (hit) {
+      state.score = baseScore + state.bonus;
+      crash();
+      break;
+    }
+
+    if (!o.near) {
+      const yOk = o.y > playerY - oh * 0.35 && o.y < playerY + ph * 0.55;
+      if (yOk) {
+        const near = rectOverlap(
+          px,
+          playerY,
+          pw + nearPadX * 2,
+          ph + nearPadY * 2,
+          o.x,
+          o.y,
+          ow + nearPadX * 2,
+          oh + nearPadY * 2,
+        );
+        if (near) {
+          o.near = true;
+          const bonus = 18;
+          state.bonus += bonus;
+          addPopup(o.x, playerY - layout.carH * 0.55, `+${bonus} NEAR`, "rgba(96,165,250,0.95)");
+          beep(980, 0.05, "triangle");
+        }
+      }
+    }
   }
 
+  state.score = baseScore + state.bonus;
   hudScore.textContent = String(state.score);
 };
 
@@ -919,6 +1125,15 @@ const loop = (ts) => {
     p.vy *= 0.92;
   }
   state.particles = state.particles.filter((p) => p.life > 0);
+
+  // Popups update (always)
+  if (state.mode !== "paused" && state.mode !== "menu") {
+    for (const p of state.popups) {
+      p.life -= dt;
+      p.y += p.vy * dt;
+    }
+    state.popups = state.popups.filter((p) => p.life > 0);
+  }
 
   render();
   requestAnimationFrame(loop);
